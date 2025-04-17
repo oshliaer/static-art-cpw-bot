@@ -1,21 +1,29 @@
+/**
+ * Основной класс приложения для генерации изображений с Yandex ART 
+ * и публикации их в Telegram канал
+ */
 class App {
   constructor() {}
 
   /**
-   * @returns {number}
+   * Получает последнее использованное зерно генерации
+   * @returns {number} Значение последнего зерна
    */
   get lastSeed() {
     return +PropertiesService.getScriptProperties().getProperty('LAST_SEED') || 0;
   }
 
   /**
-   * @param {number} seed
+   * Устанавливает значение последнего использованного зерна генерации
+   * @param {number} seed Зерно для сохранения
    */
   set lastSeed(seed) {
     PropertiesService.getScriptProperties().setProperty('LAST_SEED', String(seed));
   }
+  
   /**
-   * @returns {GoogleAppsScript.Spreadsheet.Spreadsheet}
+   * Получает объект таблицы Google Sheets
+   * @returns {GoogleAppsScript.Spreadsheet.Spreadsheet} Объект таблицы
    */
   get book() {
     if (!this._book) {
@@ -25,6 +33,10 @@ class App {
     return this._book;
   }
 
+  /**
+   * Получает лист "Daily ART" из таблицы
+   * @returns {GoogleAppsScript.Spreadsheet.Sheet} Лист таблицы с ежедневными изображениями
+   */
   get dailyArtSheet() {
     if (!this._dailyArtSheet) {
       this._dailyArtSheet = this.book.getSheetByName('Daily ART');
@@ -32,6 +44,10 @@ class App {
     return this._dailyArtSheet;
   }
 
+  /**
+   * Получает лист "Seeds" из таблицы
+   * @returns {GoogleAppsScript.Spreadsheet.Sheet} Лист таблицы с зернами генерации
+   */
   get seedsSheet() {
     if (!this._seedsSheet) {
       this._seedsSheet = this.book.getSheetByName('Seeds');
@@ -39,11 +55,19 @@ class App {
     return this._seedsSheet;
   }
 
+  /**
+   * Получает данные из листа Daily ART в виде коллекции объектов
+   * @returns {{collection: Object[], headers: string[]}} Коллекция и заголовки
+   */
   get dailyArtCollection() {
     const values = this.dailyArtSheet.getDataRange().getValues();
     return this.toCollection(values);
   }
 
+  /**
+   * Создает и возвращает экземпляр класса YandexART
+   * @returns {YandexART} Экземпляр YandexART
+   */
   get ya() {
     if (!this._ya) {
       const model = PropertiesService.getScriptProperties().getProperty('YANDEXART_MODEL');
@@ -58,6 +82,10 @@ class App {
     return this._ya;
   }
 
+  /**
+   * Создает и возвращает экземпляр класса Telegram
+   * @returns {Telegram} Экземпляр Telegram
+   */
   get telegram() {
     if (!this._telegram) {
       const token = PropertiesService.getScriptProperties().getProperty('TELEGRAM_BOT_TOKEN');
@@ -67,12 +95,16 @@ class App {
     return this._telegram;
   }
 
+  /**
+   * Генерирует новое уникальное зерно, которое не использовалось ранее
+   * @returns {number} Новое уникальное зерно
+   */
   get nextSeed() {
     const taken = this.seedsSheet
       .getRange('A:A')
       .getValues()
       .map((row) => row[0]);
-    // Generate a random integer between 1 and Number.MAX_SAFE_INTEGER (9007199254740991)
+    // Генерация случайного целого числа между 1 и Number.MAX_SAFE_INTEGER (9007199254740991)
     let seed;
     do {
       seed = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER) + 1;
@@ -81,9 +113,9 @@ class App {
   }
 
   /**
-   * Converts a 2D array to an array of objects
-   * @param {Array<Array>} data - 2D array where the first row contains column names
-   * @return {{collection: Object[], headers: string[]}} - Array of objects with keys from the header row
+   * Преобразует двумерный массив в коллекцию объектов
+   * @param {Array<Array>} data - Двумерный массив, где первая строка содержит названия столбцов
+   * @return {{collection: Object[], headers: string[]}} - Массив объектов с ключами из заголовка
    */
   toCollection(data) {
     if (!data || !Array.isArray(data) || data.length === 0) {
@@ -126,6 +158,11 @@ class App {
     };
   }
 
+  /**
+   * Главная функция генерации и публикации ежедневного изображения
+   * Проверяет наличие записи на текущий день, создает новую при отсутствии,
+   * или проверяет статус генерации и публикует результат в Telegram
+   */
   generateDailyART() {
     console.log('Generating daily ART');
     const { collection, headers } = this.dailyArtCollection;
