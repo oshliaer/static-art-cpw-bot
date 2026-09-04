@@ -6,20 +6,152 @@
 
 ## Про портреты никто не просил
 
-Самое интересное в проекте не в коде. Запрос к модели был предельно коротким: несколько слов про технику, три цвета в hex и пара слов о теме. Ни слова "портрет", ни слова "лицо", ни слова "человек" в нём нет. Единственное, что менялось от запуска к запуску, -- зерно генерации.
+Самое интересное в проекте не в коде. Запрос к модели был предельно коротким: несколько слов про технику рисования, три цвета в hex и пара слов о теме. Ни слова "портрет", ни слова "лицо", ни слова "человек" в нём нет. Единственное, что менялось от запуска к запуску, -- зерно генерации.
 
-Портреты, фасы, профили, пейзажи -- всё это модель выбрала сама. Из скупого описания палитры и техники она раз за разом доставала человеческие лица. Проект в итоге оказался не столько генератором картинок, сколько длинным наблюдением за тем, что модель считает уместным нарисовать, когда ей почти ничего не сказали.
+Портреты, фасы, профили, пейзажи -- всё это модель выбрала сама. Из скупого описания палитры и техники рисования она раз за разом доставала женские лица общего типажа или киберпанковской тематики. Проект в итоге оказался не столько генератором картинок, сколько длинным наблюдением за тем, что модель считает уместным нарисовать, когда ей почти ничего не сказали.
 
-Сам текст запроса не публикуется и хранится в Script Properties проекта Apps Script. Доступ на чтение к проекту его не открывает: Script Properties не видны даже тем, кто может просматривать код.
+Сам текст запроса не публикуется и хранится в Script Properties проекта Apps Script.
 
 ## Что делало приложение
 
-Каждый запуск триггера выполнял один из двух шагов, в зависимости от состояния строки за сегодняшний день на листе `Daily ART`:
+Точка входа одна, её вешали на ежедневный триггер:
 
-1. **Строки на сегодня нет.** Приложение брало новое зерно генерации, отправляло асинхронный запрос в Yandex ART и записывало в таблицу id операции. Картинки ещё нет, ждём.
-2. **Строка есть, id операции записан, отчёта нет.** Приложение опрашивало операцию. Как только Yandex отдавал изображение в base64, оно превращалось в blob, уходило в канал через `sendPhoto`, а в строку записывались ссылка на пост и отметка `Готово`.
+```js
+function loop() {
+  new App().generateDailyART();
+}
+```
 
-Такая двухфазная схема нужна была потому, что старый Yandex ART работал асинхронно: запрос возвращал не картинку, а операцию, готовность которой надо было опрашивать отдельно.
+Каждый запуск выполнял один из двух шагов, в зависимости от состояния строки за сегодняшний день на листе `Daily ART`. Такая двухфазная схема нужна была потому, что старый Yandex ART работал асинхронно: запрос возвращал не картинку, а операцию, готовность которой надо было опрашивать отдельно.
+
+### Чтение таблицы
+
+Лист читается целиком и превращается в коллекцию объектов с ключами из заголовка. Заголовки приводятся к нижнему регистру, поэтому порядок колонок в коде не зашит, а каждая ячейка помнит свои координаты:
+
+```js
+const headers = data[0].map((header, index) => {
+  if (typeof header !== 'string' || header.trim() === '') {
+    return `__col_${index}`;
+  }
+  return header.toLowerCase();
+});
+
+headers.forEach((header, __colIndex) => {
+  obj[header] = { __value: row[__colIndex], __colIndex, __rowIndex };
+});
+```
+
+Дальше среди строк ищется сегодняшняя, по совпадению отформатированных дат в часовом поясе таблицы.
+
+### Фаза первая: заказ картинки
+
+Если строки за сегодня нет, подбирается свободное зерно:
+
+```js
+const taken = this.seedsSheet
+  .getRange('A:A')
+  .getValues()
+  .map((row) => Number(row[0]))
+  .filter((value) => Number.isFinite(value) && value > 0);
+
+let seed;
+do {
+  seed = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER) + 1;
+} while (taken.includes(seed));
+```
+
+С этим зерном уходит запрос в Yandex ART. Ответ содержит не картинку, а идентификатор операции:
+
+```js
+imageGenerationAsync(seed) {
+  const httpRequest = UrlFetchApp.fetch(
+    'https://llm.api.cloud.yandex.net:443/foundationModels/v1/imageGenerationAsync',
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this._token}` },
+      contentType: 'application/json',
+      payload: JSON.stringify({
+        model_uri: this._model,
+        messages: [{ text: this._message, weight: 1 }],
+        generation_options: { mime_type: 'image/jpeg', seed },
+      }),
+    },
+  );
+  const response = JSON.parse(httpRequest.getContentText());
+  if (response.error) {
+    throw new Error(`Yandex ART API error: ${response.error.message}`);
+  }
+  return response;
+}
+```
+
+Строка дописывается в таблицу, и сразу за этим зерно перезаписывается текстом, иначе шестнадцатая цифра потеряется:
+
+```js
+const row = headers.map((h) => item[h]?.__value ?? '');
+this.dailyArtSheet.appendRow(row);
+this.writeSeed(this.dailyArtSheet.getLastRow(), headers, nextSeed);
+```
+
+```js
+writeSeed(rowIndex, headers, seed) {
+  const colIndex = headers.indexOf('зерно');
+  if (colIndex === -1) {
+    return;
+  }
+  this.dailyArtSheet
+    .getRange(rowIndex, colIndex + 1)
+    .setNumberFormat('@')
+    .setValue(`'${seed}`);
+}
+```
+
+На этом запуск заканчивается. Картинки ещё нет.
+
+### Фаза вторая: получение и публикация
+
+Следующий запуск находит строку за сегодня, видит записанный id операции и пустой отчёт, и опрашивает операцию. Как только приходит изображение в base64, оно превращается в blob и уходит в канал:
+
+```js
+const request = this.ya.operations(id);
+if (request.response?.image) {
+  const image = request.response.image;
+  const blob = Utilities.newBlob(Utilities.base64Decode(image), 'image/jpeg', 'image.jpg');
+  const tgResp = this.telegram.sendPhoto(blob);
+  if (tgResp.ok === true) {
+    item['результат отправки картинки'].__value =
+      `https://t.me/static_art_cpw/${tgResp.result.message_id}`;
+  }
+  item['отчет'].__value = 'Готово';
+}
+```
+
+Отправка в Telegram -- обычный `sendPhoto`, blob уходит как поле `photo` в теле запроса:
+
+```js
+sendPhoto(photo, extra = {}) {
+  const url = `https://api.telegram.org/bot${this._token}/sendPhoto`;
+  const payload = Object.assign({ chat_id: this._chatId, photo }, extra);
+  const httpResponse = UrlFetchApp.fetch(url, {
+    method: 'post',
+    muteHttpExceptions: true,
+    payload: payload,
+  });
+  if (httpResponse.getResponseCode() !== 200) {
+    throw new Error(`Error sending message: ${httpResponse.getContentText()}`);
+  }
+  return JSON.parse(httpResponse.getContentText());
+}
+```
+
+Строка перезаписывается целиком, поэтому текстовое зерно после этого восстанавливается:
+
+```js
+this.dailyArtSheet
+  .getRange(item.дата.__rowIndex + 1, 1, 1, headers.length)
+  .setValues([headers.map((h) => item[h]?.__value ?? '')]);
+this.writeSeed(item.дата.__rowIndex + 1, headers, item.зерно?.__value ?? '');
+```
 
 ## Почему проект остановлен
 
