@@ -82,10 +82,14 @@ class App {
    * @returns {number} Новое уникальное зерно
    */
   get nextSeed() {
+    // Зерна хранятся текстом, поэтому сравнивать их с числом напрямую нельзя:
+    // строгое равенство внутри includes не совпадет никогда. Приводим к числу,
+    // заголовок и пустые ячейки отсеиваются как NaN.
     const taken = this.seedsSheet
       .getRange('A:A')
       .getValues()
-      .map((row) => row[0]);
+      .map((row) => Number(row[0]))
+      .filter((value) => Number.isFinite(value) && value > 0);
     // Генерация случайного целого числа между 1 и Number.MAX_SAFE_INTEGER (9007199254740991)
     let seed;
     do {
@@ -143,15 +147,17 @@ class App {
   /**
    * Записывает зерно в ячейку строго текстом
    *
-   * Если у колонки задан числовой формат, Таблицы приводят значение к числу,
-   * а число хранится с точностью до 15 значащих цифр. Зерно занимает до 16,
-   * поэтому последняя цифра теряется и записанное зерно перестает совпадать
-   * с тем, что было отправлено в Yandex ART. Ведущий апостроф от этого не спасает,
-   * формат колонки сильнее. Поэтому формат ячейки принудительно переводится
-   * в текстовый до записи значения.
+   * Зерно занимает до 16 цифр, а число в Таблицах хранится с точностью
+   * до 15 значащих цифр. Стоит зерну попасть в ячейку числом, и последняя
+   * цифра теряется: записанное зерно перестает совпадать с отправленным
+   * в Yandex ART, а картинку по нему уже не повторить.
+   *
+   * Защиты две, и нужны обе. Ведущий апостроф говорит Таблицам, что значение
+   * текстовое, а текстовый формат ячейки не дает числовому формату колонки
+   * перебить апостроф. Апостроф в сохраненное значение не попадает.
    * @param {number} rowIndex Номер строки на листе Daily ART
    * @param {string[]} headers Заголовки листа в нижнем регистре
-   * @param {number} seed Зерно генерации
+   * @param {number|string} seed Зерно генерации
    */
   writeSeed(rowIndex, headers, seed) {
     const colIndex = headers.indexOf('зерно');
@@ -161,7 +167,7 @@ class App {
     this.dailyArtSheet
       .getRange(rowIndex, colIndex + 1)
       .setNumberFormat('@')
-      .setValue(String(seed));
+      .setValue(`'${seed}`);
   }
 
   /**
@@ -197,7 +203,7 @@ class App {
           __value: '',
         },
         зерно: {
-          __value: String(nextSeed),
+          __value: `'${nextSeed}`,
         },
       };
       try {
@@ -233,6 +239,9 @@ class App {
         this.dailyArtSheet
           .getRange(item.дата.__rowIndex + 1, 1, 1, headers.length)
           .setValues([headers.map((h) => item[h]?.__value ?? '')]);
+        // setValues переписывает всю строку, включая зерно, поэтому текстовую
+        // запись зерна нужно восстановить
+        this.writeSeed(item.дата.__rowIndex + 1, headers, item.зерно?.__value ?? '');
         console.log(`Daily ART generated successfully for ${id}`);
         return;
       }
