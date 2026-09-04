@@ -145,29 +145,25 @@ class App {
   }
 
   /**
-   * Записывает зерно в ячейку строго текстом
+   * Переводит ячейку зерна в текстовый формат до того, как в нее что-то запишут
    *
    * Зерно занимает до 16 цифр, а число в Таблицах хранится с точностью
    * до 15 значащих цифр. Стоит зерну попасть в ячейку числом, и последняя
    * цифра теряется: записанное зерно перестает совпадать с отправленным
    * в Yandex ART, а картинку по нему уже не повторить.
    *
-   * Защиты две, и нужны обе. Ведущий апостроф говорит Таблицам, что значение
-   * текстовое, а текстовый формат ячейки не дает числовому формату колонки
-   * перебить апостроф. Апостроф в сохраненное значение не попадает.
+   * Защиты две, и нужны обе. Ведущий апостроф в значении говорит Таблицам,
+   * что оно текстовое, а текстовый формат ячейки не дает числовому формату
+   * колонки перебить апостроф. Апостроф в сохраненное значение не попадает.
    * @param {number} rowIndex Номер строки на листе Daily ART
    * @param {string[]} headers Заголовки листа в нижнем регистре
-   * @param {number|string} seed Зерно генерации
    */
-  writeSeed(rowIndex, headers, seed) {
+  setSeedFormat(rowIndex, headers) {
     const colIndex = headers.indexOf('зерно');
     if (colIndex === -1) {
       return;
     }
-    this.dailyArtSheet
-      .getRange(rowIndex, colIndex + 1)
-      .setNumberFormat('@')
-      .setValue(`'${seed}`);
+    this.dailyArtSheet.getRange(rowIndex, colIndex + 1).setNumberFormat('@');
   }
 
   /**
@@ -215,8 +211,11 @@ class App {
         item.отчет.__value = 'Ошибка генерации изображения';
       }
       const row = headers.map((h) => item[h]?.__value ?? '');
-      this.dailyArtSheet.appendRow(row);
-      this.writeSeed(this.dailyArtSheet.getLastRow(), headers, nextSeed);
+      // appendRow не умеет задавать формат ячейки, а формат нужен до записи,
+      // иначе зерно успеет стать числом. Поэтому строка пишется в явный диапазон
+      const rowIndex = this.dailyArtSheet.getLastRow() + 1;
+      this.setSeedFormat(rowIndex, headers);
+      this.dailyArtSheet.getRange(rowIndex, 1, 1, headers.length).setValues([row]);
       return;
     }
     const report = dailyItem['отчет'].__value;
@@ -236,12 +235,12 @@ class App {
           item['результат отправки картинки'].__value = 'Ошибка отправки картинки';
         }
         item['отчет'].__value = 'Готово';
+        // setValues переписывает всю строку, включая зерно, поэтому формат
+        // ячейки закрепляется до записи
+        this.setSeedFormat(item.дата.__rowIndex + 1, headers);
         this.dailyArtSheet
           .getRange(item.дата.__rowIndex + 1, 1, 1, headers.length)
           .setValues([headers.map((h) => item[h]?.__value ?? '')]);
-        // setValues переписывает всю строку, включая зерно, поэтому текстовую
-        // запись зерна нужно восстановить
-        this.writeSeed(item.дата.__rowIndex + 1, headers, item.зерно?.__value ?? '');
         console.log(`Daily ART generated successfully for ${id}`);
         return;
       }
